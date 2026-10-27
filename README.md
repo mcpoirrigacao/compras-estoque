@@ -12,7 +12,8 @@ Painel de métricas de compras e estoque de peças (Faturamento, Curva ABC, Inve
   - `DADOS_BI_COMPRAS.csv` — aba **Compras** (pedidos de compra: KPIs, gráficos e detalhamento)
   - `HITORICO_PC.xlsx` — aba **Compras**, coluna "Histórico da Compra"
   - `Filiais.csv` — aba **Compras**, nomes das filiais (Código;Filial)
-- O único arquivo gravado pelo painel na pasta é `compras_pecas_parametros.json` (usuários admin/comum e nomes das planilhas).
+- Login e acesso no padrão dos apps MAQCAMPO: botão Microsoft no topo, tela de login e de acesso restrito, níveis admin/comum.
+- O painel só grava na pasta os arquivos da aba Parâmetros: `compras_pecas_acesso.json` (usuários admin/comum) e `compras_pecas_parametros.json` (nomes das planilhas). O primeiro login vira admin.
 - Aba **Parâmetros** (só administradores): usuários, situação das planilhas e nomes dos arquivos.
 - **Atualizar dados**: lê de novo as planilhas da pasta. O painel também confere sozinho a cada 2 minutos.
 
