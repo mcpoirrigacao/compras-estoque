@@ -4914,11 +4914,23 @@ function gfetch(url, opts){
     return fetch(url, opts);
   });
 }
+var _siteId = null;
+function getSiteId(){
+  if (_siteId) return Promise.resolve(_siteId);
+  return gfetch('https://graph.microsoft.com/v1.0/sites/'+SP_HOSTNAME+':'+SP_SITE_PATH).then(function(r){
+    if (!r.ok){ pastaErro = 'site: HTTP '+r.status; return null; }
+    return r.json().then(function(j){ _siteId = j.id || null; return _siteId; });
+  });
+}
 /* localiza a pasta no site (driveId + itemId) */
 function resolverPasta(){
   if (pasta) return Promise.resolve(pasta);
   var enc = SP_PASTA_PATH.split('/').map(encodeURIComponent).join('/');
-  return gfetch('https://graph.microsoft.com/v1.0/sites/'+SP_HOSTNAME+':'+SP_SITE_PATH+':/drive/root:'+enc).then(function(r){
+  /* mesmo caminho dos outros apps: primeiro o id do site, depois a pasta na biblioteca padrão */
+  return getSiteId().then(function(siteId){
+    if (!siteId) throw new Error(pastaErro || 'site não encontrado');
+    return gfetch('https://graph.microsoft.com/v1.0/sites/'+siteId+'/drive/root:'+enc);
+  }).then(function(r){
     if (!r.ok){ pastaErro = 'HTTP '+r.status; return null; }
     return r.json().then(function(j){
       pasta = { driveId: j.parentReference && j.parentReference.driveId, itemId: j.id, nome: j.name, webUrl: j.webUrl || SP_PASTA_WEB };
