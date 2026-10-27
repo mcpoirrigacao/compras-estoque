@@ -4123,13 +4123,13 @@ return api;
 
 /* ================= APP INIT ================= */
 var TABS = [
+  {id:'compras', label:'Compras', build:buildCompras, noData:true},
   {id:'fat', label:'Faturamento', build:buildFaturamento},
   {id:'abc', label:'Curva ABC', build:buildCurvaABC},
   {id:'inv', label:'Inventário', build:buildInventario},
   {id:'giro', label:'Giro', build:buildGiro},
   {id:'sort', label:'Sortimento', build:buildSortimento},
   {id:'zv', label:'Zero Vendas', build:buildZeroVendas},
-  {id:'compras', label:'Compras', build:buildCompras, noData:true},
   {id:'param', label:'Parâmetros', build:buildParametros, noData:true},
 ];
 
@@ -4137,7 +4137,7 @@ var tabsHost = document.getElementById('tabs-host');
 var tabsNav = document.getElementById('view-tabs');
 var filtersRow = document.getElementById('filters-row');
 var built = {};
-var currentTab = 'fat';
+var currentTab = 'compras';
 try { var savedTab = localStorage.getItem('pm_tab'); if (savedTab && savedTab!=='param' && TABS.some(function(t){return t.id===savedTab && !t.hidden;})) currentTab = savedTab; } catch(e){}
 
 TABS.forEach(function(t){
