@@ -1,4 +1,4 @@
-# Compras-peças · MCPO Irrigação
+# Compras-estoque · MCPO Irrigação
 
 Painel de métricas de compras e estoque de peças (Faturamento, Curva ABC, Inventário, Giro, Sortimento, Zero Vendas e Compras).
 
