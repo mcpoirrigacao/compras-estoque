@@ -1,6 +1,6 @@
 # Compras-peças · MCPO Irrigação
 
-Painel de métricas de compras e estoque de peças (Faturamento, Curva ABC, Inventário, Giro, Sortimento, Zero Vendas).
+Painel de métricas de compras e estoque de peças (Faturamento, Curva ABC, Inventário, Giro, Sortimento, Zero Vendas e Compras).
 
 - Publicado em: https://mcpoirrigacao.github.io/compras-estoque/
 - Login com a conta Microsoft da MAQCAMPO (mesmo registro de app do Azure dos demais apps MCPO).
@@ -9,6 +9,9 @@ Painel de métricas de compras e estoque de peças (Faturamento, Curva ABC, Inve
   - `Estoque Histórico.xlsx` — Giro e evolução do estoque varejo
   - `Inventário_de_Peças.xlsx` — Inventário, saldos da Curva ABC/Sortimento e Zero Vendas
   - `Armazém.xlsx` — nomes dos armazéns (opcional)
+  - `DADOS_BI_COMPRAS.csv` — aba **Compras** (pedidos de compra: KPIs, gráficos e detalhamento)
+  - `HITORICO_PC.xlsx` — aba **Compras**, coluna "Histórico da Compra"
+  - `Filiais.csv` — aba **Compras**, nomes das filiais (Código;Filial)
 - O único arquivo gravado pelo painel na pasta é `compras_pecas_parametros.json` (usuários admin/comum e nomes das planilhas).
 - Aba **Parâmetros** (só administradores): usuários, situação das planilhas e nomes dos arquivos.
 - **Atualizar dados**: lê de novo as planilhas da pasta. O painel também confere sozinho a cada 2 minutos.
