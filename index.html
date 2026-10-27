@@ -403,11 +403,11 @@
           <svg class="ms-ico" width="13" height="13" viewBox="0 0 23 23"><path fill="#f35325" d="M1 1h10v10H1z"/><path fill="#81bc06" d="M12 1h10v10H12z"/><path fill="#05a6f0" d="M1 12h10v10H1z"/><path fill="#ffba08" d="M12 12h10v10H12z"/></svg>
           <span id="ms-login-label">Carregando…</span>
         </button>
-      <button class="btn-update somente-admin" type="button" id="update-data-btn" title="Selecione o Métrica Mensal.xlsx e/ou o Estoque Histórico.xlsx (pode escolher os dois juntos)">
+      <button class="btn-update" type="button" id="update-data-btn" title="Lê de novo as planilhas da pasta Compras-estoque do SharePoint">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
         <span id="update-data-label">Atualizar dados</span>
       </button>
-      <input type="file" id="update-data-input" accept=".xlsx" multiple hidden>
+      
       </div>
       <div class="topbar-row">
         <span class="sync-status" id="sync-status" hidden></span>
@@ -2531,7 +2531,7 @@ function computeAbcFromAoa(faoa, headerRowIdx, header){
   });
   rows.sort(function(p,q){ return q[5]-p[5]; });
   list.sort();
-  return {ini:list[0], fim:list[list.length-1], rows:rows, inv:(DATA.abc && DATA.abc.inv) || {stock:{}, netcost:{}}};
+  return {ini:list[0], fim:list[list.length-1], rows:rows, inv:{stock:{}, netcost:{}}};
 }
 
 /* ================= APP INIT ================= */
@@ -2550,7 +2550,7 @@ var tabsNav = document.getElementById('view-tabs');
 var filtersRow = document.getElementById('filters-row');
 var built = {};
 var currentTab = 'fat';
-try { var savedTab = localStorage.getItem('pm_tab'); if (savedTab && TABS.some(function(t){return t.id===savedTab && !t.hidden;})) currentTab = savedTab; } catch(e){}
+try { var savedTab = localStorage.getItem('pm_tab'); if (savedTab && savedTab!=='param' && TABS.some(function(t){return t.id===savedTab && !t.hidden;})) currentTab = savedTab; } catch(e){}
 
 TABS.forEach(function(t){
   var btn = el('button','view-tab'+(t.id===currentTab?' is-active':''), esc(t.label)+'<span class="tab-dot" hidden></span>');
@@ -2588,10 +2588,11 @@ function rerenderAll(){
 
 function buildSemDados(){
   var p = el('div','tab-panel','');
-  var msg = nivelAcesso()==='admin' || nivelAcesso()==='local'
-    ? 'Importe a base completa na aba <b>Parâmetros</b> ou aguarde a sincronização com o SharePoint.'
-    : 'Aguardando a sincronização com o SharePoint. Se persistir, peça a um administrador para carregar a base.';
-  p.appendChild(el('div','empty-state','<b>Nenhuma base carregada</b>'+msg));
+  var titulo = lendo ? 'Lendo as planilhas da pasta…' : (erroLeitura ? 'Não foi possível montar o painel' : 'Aguardando as planilhas');
+  var msg = lendo ? 'O painel está baixando e calculando as planilhas do SharePoint. Isso leva alguns segundos.'
+    : (erroLeitura ? esc(erroLeitura)+(nivelAcesso()==='admin' ? ' — confira os nomes dos arquivos na aba <b>Parâmetros</b>.' : ' — avise um administrador.')
+    : (msAccount ? 'Conectando à pasta Compras-estoque do SharePoint…' : 'Entre com a conta Microsoft para carregar os dados.'));
+  p.appendChild(el('div','empty-state','<b>'+titulo+'</b>'+msg));
   return p;
 }
 function selectTab(id){
@@ -2771,7 +2772,7 @@ function fmtDateTime(s){
   return out;
 }
 function updateSourceLabel(){
-  document.getElementById('last-updated-text').textContent = DATA ? 'Base de '+fmtDateTime(DATA.meta.gerado_em) : '—';
+  document.getElementById('last-updated-text').textContent = DATA ? 'Planilhas lidas em '+fmtDateTime(DATA.meta.gerado_em) : '—';
 }
 updateSourceLabel();
 
@@ -2953,7 +2954,7 @@ function parseFaturamentoWorkbook(wb){
   Object.keys(devolGrid).forEach(function(f){ Object.keys(devolGrid[f]).forEach(function(m){ devolMonths[m]=1; }); });
 
   var abc = headerRowIdx >= 0 ? computeAbcFromAoa(faoa, headerRowIdx, header) : null;
-  return { months: months, grid: grid, clientsGrid: clientsGrid, filiais: filiais, devolGrid: devolGrid, devolMonths: Object.keys(devolMonths).sort(), abc: abc, cmvGrid: (typeof cmvGrid!=='undefined' ? cmvGrid : null) };
+  return { months: months, grid: grid, clientsGrid: clientsGrid, filiais: filiais, devolGrid: devolGrid, devolMonths: Object.keys(devolMonths).sort(), abc: abc, cmvGrid: (typeof cmvGrid!=='undefined' ? cmvGrid : null), faoa: faoa, headerRowIdx: headerRowIdx, header: header };
 }
 
 function applyFaturamentoUpdate(parsed, fileName){
@@ -3012,76 +3013,226 @@ function parseEstoqueHistWorkbook(wb){
   return {estoque:grid, months:Object.keys(ms).sort()};
 }
 
-var updateBtn = document.getElementById('update-data-btn');
-var updateInput = document.getElementById('update-data-input');
-var updateLabel = document.getElementById('update-data-label');
-if (updateBtn && updateInput){
-  updateBtn.addEventListener('click', function(){
-    if (!DATA){ showToast('Carregue primeiro a base completa na aba Parâmetros.', true); return; }
-    if (nivelAcesso()!=='admin' && nivelAcesso()!=='local'){ showToast('Somente administradores atualizam os dados.', true); return; }
-    updateInput.click();
-  });
-  updateInput.addEventListener('change', function(){
-    var files = Array.prototype.slice.call(updateInput.files || []);
-    updateInput.value = '';
-    if (!files.length) return;
-    if (typeof XLSX === 'undefined'){
-      showToast('Não foi possível carregar o leitor de planilhas (sem conexão com a internet?).', true);
-      return;
-    }
-    updateBtn.disabled = true; updateBtn.classList.add('is-loading');
-    updateLabel.textContent = 'Atualizando...';
-    function readOne(file){
-      return new Promise(function(res, rej){
-        var reader = new FileReader();
-        reader.onload = function(e){ res({file:file, buf:e.target.result}); };
-        reader.onerror = function(){ rej(new Error('Erro ao ler "'+file.name+'".')); };
-        reader.readAsArrayBuffer(file);
-      });
-    }
-    Promise.all(files.map(readOne)).then(function(items){
-      var done = [];
-      items.forEach(function(it){
-        try{
-          var wb = XLSX.read(it.buf, {type:'array', cellDates:true});
-          if (isEstoqueHistWorkbook(wb)){
-            var est = parseEstoqueHistWorkbook(wb);
-            DATA.giro.estoque = est.estoque; DATA.giro.months = est.months;
-            BASE_NONFAT_MONTHS = computeBaseNonfat();
-            dirtySec.estoque = true;
-            resetTabState('giro');
-            done.push('Estoque ("'+it.file.name+'")');
-          } else {
-            var parsed = parseFaturamentoWorkbook(wb);
-            applyFaturamentoUpdate(parsed, it.file.name);
-            dirtySec.fat = true;
-            done.push('Faturamento/Curva ABC/CMV do Giro ("'+it.file.name+'")');
-          }
-        } catch(err){
-          console.error(err);
-          showToast('Não foi possível atualizar "'+it.file.name+'": ' + err.message, true);
-        }
-      });
-      if (done.length){
-        DATA.meta.gerado_em = todayStr();
-        updateSourceLabel(); renderFilterBar(); updateTabDots(); rerenderAll();
-        scheduleCloudSave();
-        showToast('Atualizado: '+done.join(' · ')+(msAccount?' — gravando no SharePoint…':'.'));
-      }
-    }).catch(function(err){ showToast(err.message, true); }).then(function(){
-      updateBtn.disabled = false; updateBtn.classList.remove('is-loading');
-      updateLabel.textContent = 'Atualizar dados';
-    });
-  });
-}
-
 
 /* =====================================================================
-   LOGIN MICROSOFT + ARMAZENAMENTO NO SHAREPOINT + CONTROLE DE ACESSO
-   (mesmo registro de app do Azure e mesmo site dos demais apps MCPO)
-   Os dados ficam na pasta do SharePoint indicada por SP_PASTA_LINK:
-     compras_pecas_dados.json  → base completa do painel (DATA)
-     compras_pecas_acesso.json → { emailsAutorizados:[admins], emailsComuns:[...] }
+   MOTOR DE CÁLCULO — monta a base do painel a partir das planilhas da pasta
+   Entradas (pasta Compras-estoque do SharePoint):
+     Métrica Mensal.xlsx      → Base_Fat. / Fat_Hist_Filial / Base_Filiais / Compras
+     Estoque Histórico.xlsx   → saldo mensal do armazém 01 por filial (Giro e evolução do Inventário)
+     Inventário_de_Peças.xlsx → aba Inventário (saldo/custo por filial × item × armazém)
+                                + Planilha1 (data da última entrada por filial × item)
+     Armazém.xlsx             → nomes dos armazéns
+   Mesmas regras do painel original (ver comentários de cada aba).
+   ===================================================================== */
+var ARZ_NOMES = { '01':'Peças varejo', '10':'Peças com defeito', '20':'EPI', '30':'Sist. de irrigação', '31':'Sist. de gotejo',
+  '32':'Sist. de energia solar', '50':'Requisitado em O.S.', '60':'Uso e consumo', '80':'Estoque em terceiros', '81':'Estoque de terceiros' };
+var FILIAL_ORDEM = ['010101','010102','010103','010104','010105','010106','010107','010108','010109','010110','010111','010112'];
+
+function sheetAoa(wb, name){
+  var ws = wb.Sheets[name];
+  if (!ws){ var k = Object.keys(wb.Sheets).filter(function(n){ return n.trim().toLowerCase()===String(name).trim().toLowerCase(); })[0]; ws = k ? wb.Sheets[k] : null; }
+  return ws ? XLSX.utils.sheet_to_json(ws, {header:1, raw:true}) : null;
+}
+function findHeader(aoa, cols, maxRows){
+  for (var r=0; r<Math.min(aoa.length, maxRows||20); r++){
+    var row = (aoa[r]||[]).map(function(x){ return String(x==null?'':x).trim(); });
+    if (cols.every(function(c){ return row.indexOf(c)>=0; })) return {idx:r, header:row};
+  }
+  return null;
+}
+function txt(v){ return String(v==null?'':v).trim(); }
+function num(v){ if (typeof v==='number') return v; var n = parseFloat(String(v==null?'':v).replace(/\./g,'').replace(',','.')); return isNaN(n)?0:n; }
+function isoDate(v){
+  if (v instanceof Date && !isNaN(v)){
+    if (v.getUTCFullYear() < 1950) return '';   /* hora pura (sem data) vira 1899/1900 */
+    return v.getUTCFullYear()+'-'+String(v.getUTCMonth()+1).padStart(2,'0')+'-'+String(v.getUTCDate()).padStart(2,'0');
+  }
+  var s = txt(v);
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return m[0];
+  m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/); if (m) return m[3]+'-'+m[2]+'-'+m[1];
+  return '';
+}
+function mesAntes(mk, n){ var y=+mk.slice(0,4), m=+mk.slice(5,7)-n; while(m<=0){ m+=12; y--; } return y+'-'+String(m).padStart(2,'0'); }
+
+/* código da filial → nome (Base_Filiais da Métrica Mensal; Irrigafaz = 999999) */
+function lerFiliais(wbMetrica){
+  var map = {'999999':'Irrigafaz'};
+  var aoa = sheetAoa(wbMetrica, 'Base_Filiais') || [];
+  var h = findHeader(aoa, ['Código','Filial']);
+  if (h){
+    var iC = h.header.indexOf('Código'), iF = h.header.indexOf('Filial');
+    for (var r=h.idx+1; r<aoa.length; r++){ var row=aoa[r]||[]; var c=txt(row[iC]); if (c) map[c.padStart(6,'0')] = txt(row[iF]); }
+  }
+  return map;
+}
+
+/* compras por filial × mês (aba Compras da Métrica Mensal) */
+function lerCompras(wbMetrica){
+  var aoa = sheetAoa(wbMetrica, 'Compras'); if (!aoa) return {grid:{}};
+  var h = findHeader(aoa, ['Descr_Filial','TOTAL','MÊS_ANO']); if (!h) return {grid:{}};
+  var iF=h.header.indexOf('Descr_Filial'), iT=h.header.indexOf('TOTAL'), iM=h.header.indexOf('MÊS_ANO'), grid={};
+  for (var r=h.idx+1; r<aoa.length; r++){
+    var row=aoa[r]||[]; var f=txt(row[iF]), ma=txt(row[iM]).match(/^(\d{1,2})\/(\d{4})$/);
+    if (!f || !ma) continue;
+    var mk = ma[2]+'-'+ma[1].padStart(2,'0');
+    grid[f] = grid[f] || {}; grid[f][mk] = Math.round(((grid[f][mk]||0) + num(row[iT]))*100)/100;
+  }
+  return {grid:grid};
+}
+
+/* Inventário_de_Peças.xlsx → linhas {cod, fil, item, arz, desc, qtd, valor, custo} + datas de última entrada */
+function lerInventario(wbInv){
+  var aoa = sheetAoa(wbInv, 'Inventário') || sheetAoa(wbInv, wbInv.SheetNames[0]);
+  var h = findHeader(aoa||[], ['Loja','Produto','Arz','Saldo Atual','Sld.Atu.']);
+  if (!h) throw new Error('Inventário_de_Peças: não encontrei o cabeçalho (Loja, Produto, Arz, Saldo Atual, Sld.Atu.).');
+  var ix = function(n){ return h.header.indexOf(n); };
+  var iL=ix('Loja'), iP=ix('Produto'), iA=ix('Arz'), iD=ix('Descricao'), iQ=ix('Saldo Atual'), iV=ix('Sld.Atu.'), iC=ix('C Unitario'), iE=ix('Dt.Ult.Entr.');
+  var linhas = [];
+  for (var r=h.idx+1; r<aoa.length; r++){
+    var row = aoa[r]||[]; var cod = txt(row[iL]); var item = txt(row[iP]);
+    if (!cod || !item) continue;
+    cod = cod.padStart(6,'0');
+    linhas.push({cod:cod, item:item, arz:txt(row[iA]).padStart(2,'0'), desc:txt(row[iD]), qtd:num(row[iQ]), valor:num(row[iV]), custo:num(row[iC]), entr: iE>=0 ? isoDate(row[iE]) : ''});
+  }
+  var entr = {};
+  var aoa2 = sheetAoa(wbInv, 'Planilha1');
+  var h2 = aoa2 ? findHeader(aoa2, ['D1_FILIAL','D1_COD','ULTIMA_DATA_ENTRADA']) : null;
+  if (h2){
+    var jF=h2.header.indexOf('D1_FILIAL'), jC=h2.header.indexOf('D1_COD'), jD=h2.header.indexOf('ULTIMA_DATA_ENTRADA');
+    for (var k=h2.idx+1; k<aoa2.length; k++){
+      var rw = aoa2[k]||[]; var f = txt(rw[jF]), c = txt(rw[jC]), d = isoDate(rw[jD]);
+      if (f && c && d){ var key = f.padStart(6,'0')+'|'+c; if (!entr[key] || d > entr[key]) entr[key] = d; }
+    }
+  }
+  linhas.forEach(function(l){ var d = entr[l.cod+'|'+l.item]; if (d && (!l.entr || d > l.entr)) l.entr = d; });
+  return linhas;
+}
+function lerArmazens(wbArz){
+  var map = {};
+  if (!wbArz) return map;
+  var aoa = sheetAoa(wbArz, wbArz.SheetNames[0]) || [];
+  var h = findHeader(aoa, ['Codigo','Descricao']); if (!h) return map;
+  for (var r=h.idx+1; r<aoa.length; r++){ var row=aoa[r]||[]; var c=txt(row[0]).padStart(2,'0'); if (c) map[c] = txt(row[1]); }
+  return map;
+}
+function nomeArz(cod, arzMap){
+  if (ARZ_NOMES[cod]) return ARZ_NOMES[cod];
+  var d = arzMap[cod]; if (!d) return 'Armazém '+cod;
+  d = d.toLowerCase(); return d.charAt(0).toUpperCase()+d.slice(1);
+}
+
+/* vendas por filial × item a partir das linhas da Base_Fat. */
+function vendasBaseFat(faoa, hIdx, header, filMap, win){
+  var ix = function(n){ return header.indexOf(n); };
+  var iF=ix('Filial'), iL=ix('Loja'), iAM=ix('Ano_Mes'), iT=ix('Tipo'), iP=ix('Produto'), iQ=ix('Qtde.'), iD=ix('Datas');
+  var net = {}, ult = {}, baseIni = null;
+  for (var r=hIdx+1; r<faoa.length; r++){
+    var row = faoa[r]; if (!row) continue;
+    var mk = excelMonthKey(row[iAM]); var prod = txt(row[iP]); if (!mk || !prod) continue;
+    if (!baseIni || mk < baseIni) baseIni = mk;
+    var fil = txt(row[iL]) || filMap[txt(row[iF]).padStart(6,'0')] || '';
+    var key = fil+'|'+prod, q = num(row[iQ]), dev = row[iT]==='D';
+    if (win[mk]) net[key] = (net[key]||0) + (dev ? -q : q);
+    if (!dev){ var d = isoDate(row[iD]); if (d && (!ult[key] || d > ult[key])) ult[key] = d; }
+  }
+  return {net:net, ult:ult, baseIni:baseIni};
+}
+
+/* ---------- base completa ---------- */
+function montarBase(f){
+  /* f = {metrica:wb, estoque:wb, inventario:wb, armazem:wb|null, invData:'YYYY-MM-DD', hoje:'YYYY-MM-DD', fontes:{...}} */
+  var filMap = lerFiliais(f.metrica);
+  var fat = parseFaturamentoWorkbook(f.metrica);
+  var est = parseEstoqueHistWorkbook(f.estoque);
+  var arzMap = lerArmazens(f.armazem);
+  var inv = lerInventario(f.inventario);
+  var invNome = function(cod){ return cod==='010101' ? 'Matriz' : (filMap[cod] || cod); };   /* no inventário Palmas = Matriz */
+  var filNome = function(cod){ return filMap[cod] || cod; };
+
+  /* ===== Inventário (todas as filiais e armazéns) ===== */
+  var byFil = {}, byArz = {}, cross = {}, skusFil = {}, skusSet = {}, skusRep = 0, vt = 0, qt = 0;
+  inv.forEach(function(l){
+    var fn = invNome(l.cod), an = nomeArz(l.arz, arzMap);
+    byFil[fn] = byFil[fn] || {filial:fn, valor:0, qtd:0}; byFil[fn].valor += l.valor; byFil[fn].qtd += l.qtd;
+    byArz[an] = byArz[an] || {arz:an, nome:an, valor:0, qtd:0}; byArz[an].valor += l.valor; byArz[an].qtd += l.qtd;
+    cross[fn] = cross[fn] || {}; cross[fn][an] = (cross[fn][an]||0) + l.valor;
+    vt += l.valor; qt += l.qtd;
+    if (l.arz==='01' && l.qtd > 0){ skusFil[fn] = (skusFil[fn]||0) + 1; skusSet[l.item] = 1; skusRep++; }
+  });
+  var r2 = function(x){ return Math.round(x*100)/100; };
+  var invPecas = {
+    kpi: {valor_total:r2(vt), qtd_total:r2(qt), skus:Object.keys(skusSet).length, skus_repeat:skusRep},
+    by_filial: Object.keys(byFil).map(function(k){ var o=byFil[k]; return {filial:k, valor:r2(o.valor), qtd:r2(o.qtd)}; }).sort(function(a,b){ return b.valor-a.valor; }),
+    by_arz: Object.keys(byArz).map(function(k){ var o=byArz[k]; return {arz:k, nome:k, valor:r2(o.valor), qtd:r2(o.qtd)}; }).sort(function(a,b){ return b.valor-a.valor; }),
+    cross: cross,
+    skus_by_filial: Object.keys(skusFil).map(function(k){ return {filial:k, skus:skusFil[k], pct: skusRep ? Math.round(skusFil[k]/skusRep*10000)/10000 : 0}; }).sort(function(a,b){ return b.skus-a.skus; }),
+    hist: (function(){
+      var total = {}; Object.keys(est.estoque).forEach(function(fl){ Object.keys(est.estoque[fl]).forEach(function(m){ total[m] = r2((total[m]||0) + est.estoque[fl][m]); }); });
+      return {months: est.months, total: total, grid: est.estoque};
+    })()
+  };
+
+  /* ===== saldos do armazém 01 para Curva ABC / Sortimento ===== */
+  var stock = {}, rede = {};
+  inv.forEach(function(l){
+    if (l.arz!=='01' || l.qtd<=0) return;
+    var c = l.qtd ? l.valor/l.qtd : l.custo;
+    if (l.cod!=='999999') stock[filNome(l.cod)+'|'+l.item] = [l.qtd, Math.round(c*10000)/10000];
+    rede[l.item] = rede[l.item] || [0,0]; rede[l.item][0] += l.qtd; rede[l.item][1] += l.valor;
+  });
+  var netcost = {}; Object.keys(rede).forEach(function(it){ if (rede[it][0]>0) netcost[it] = Math.round(rede[it][1]/rede[it][0]*10000)/10000; });
+  var abc = fat.abc || {ini:null, fim:null, rows:[]};
+  abc.inv = {data: f.fontes && f.fontes.inventario || 'Inventário_de_Peças.xlsx', arz:'01 - Peças varejo', stock:stock, netcost:netcost};
+
+  /* ===== Zero Vendas: armazém 01, sem IRRIGAFAZ; janela = 12 meses da Curva ABC ===== */
+  var win = {}; if (abc.fim){ for (var i=0;i<12;i++) win[mesAntes(abc.fim, i)] = 1; }
+  var vend = vendasBaseFat(fat.faoa, fat.headerRowIdx, fat.header, filMap, win);
+  var porItem = {};   /* item → [{fil, q}] com venda líquida > 0 na janela */
+  Object.keys(vend.net).forEach(function(k){ var q = vend.net[k]; if (q>0){ var i=k.indexOf('|'); var it=k.slice(i+1); (porItem[it] = porItem[it] || []).push({fil:k.slice(0,i), q:q}); } });
+  var ordem = function(fl){ var c = Object.keys(filMap).filter(function(k){ return filMap[k]===fl; })[0]; var p = FILIAL_ORDEM.indexOf(c); return p<0 ? 99 : p; };
+  var zvRows = [], tot = {};
+  inv.forEach(function(l){
+    if (l.arz!=='01' || l.qtd<=0 || l.cod==='999999') return;
+    var fn = filNome(l.cod), key = fn+'|'+l.item;
+    var t = tot[fn] = tot[fn] || {total:0, n:0, cv:0, ncv:0};
+    t.total += l.valor; t.n++;
+    if ((vend.net[key]||0) > 0){ t.cv += l.valor; t.ncv++; return; }
+    var outros = (porItem[l.item]||[]).filter(function(x){ return x.fil!==fn; }).sort(function(a,b){ return ordem(a.fil)-ordem(b.fil); });
+    var outQ = outros.reduce(function(s,x){ return s+x.q; }, 0);
+    zvRows.push([fn, l.item, l.desc, l.qtd, r2(l.valor), Math.round(l.valor/l.qtd*10000)/10000, l.entr||'', vend.ult[key]||'', r2(outQ),
+      outros.map(function(x){ return x.fil+': '+Math.round(x.q*100)/100; }).join(' · ')]);
+  });
+  Object.keys(tot).forEach(function(k){ var t=tot[k]; t.total=r2(t.total); t.cv=r2(t.cv); });
+  var zv = {ini:abc.ini, fim:abc.fim, corte:(abc.ini||'')+'-01', ref:f.invData, baseIni:vend.baseIni, invData:f.invData, tot:tot, rows:zvRows};
+
+  /* ===== Giro: estoque histórico só de meses fechados (o mês corrente fica fora) ===== */
+  var mesAtual = (f.hoje||'').slice(0,7);
+  var giroMonths = est.months.filter(function(m){ return !mesAtual || m < mesAtual; });
+  var giroEst = {};
+  Object.keys(est.estoque).forEach(function(fl){ giroMonths.forEach(function(m){ if (est.estoque[fl][m]!=null){ (giroEst[fl] = giroEst[fl] || {})[m] = est.estoque[fl][m]; } }); });
+
+  var compras = lerCompras(f.metrica);
+  var periodos = {}; fat.months.concat(giroMonths).forEach(function(m){ periodos[m]=1; });
+  Object.keys(compras.grid).forEach(function(fl){ Object.keys(compras.grid[fl]).forEach(function(m){ periodos[m]=1; }); });
+  var filiais = uniq(fat.filiais.concat(Object.keys(giroEst)).filter(function(x){ return x!=='Irrigafaz'; }));
+
+  return {
+    meta: {gerado_em: f.agora || '', fonte: (f.fontes && f.fontes.metrica) || 'Métrica Mensal.xlsx', filiais: filiais, periodos: Object.keys(periodos).sort(), fontes: f.fontes || {}},
+    fat: {grid:{months:fat.months, grid:fat.grid}, clients_grid:fat.clientsGrid, devol_grid:{months:fat.devolMonths, grid:fat.devolGrid}},
+    abc: abc,
+    giro: {months: giroMonths, estoque: giroEst, cmv: fat.cmvGrid || {}},
+    invPecas: invPecas,
+    zv: zv,
+    compras: compras
+  };
+}
+
+/* =====================================================================
+   LOGIN MICROSOFT + LEITURA DAS PLANILHAS NO SHAREPOINT + CONTROLE DE ACESSO
+   Pasta: MCPOIRRIGACAO › Documentos Compartilhados › Documentos Compartilhados › Compras-estoque
+   O painel lê as planilhas da pasta a cada acesso e recalcula tudo no navegador.
+   O único arquivo que o painel grava na pasta é compras_pecas_parametros.json
+   (usuários admin/comum e nomes dos arquivos de origem).
    ===================================================================== */
 function getRedirectUri(){
   var loc = window.location;
@@ -3099,21 +3250,34 @@ var MSAL_CONFIG = {
   cache:{ cacheLocation:'localStorage', storeAuthStateInCookie:true }
 };
 var GRAPH_SCOPES = ['Files.ReadWrite','Sites.ReadWrite.All','User.Read'];
-var SP_PASTA_LINK = 'https://maqcampoirrigacao.sharepoint.com/:f:/s/MCPOIRRIGACAO/IgCSpSwl2l-BRrNpTvvFlRcSARa3oRP4OlPIqfIqlXnUEjo?e=7Ca3An';
-var DADOS_FILE  = 'compras_pecas_dados.json';
-var ACESSO_FILE = 'compras_pecas_acesso.json';
-var CACHE_KEY   = 'compras_pecas_cache';
+var SP_HOSTNAME   = 'maqcampoirrigacao.sharepoint.com';
+var SP_SITE_PATH  = '/sites/MCPOIRRIGACAO';
+var SP_PASTA_PATH = '/Documentos Compartilhados/Compras-estoque';   /* caminho dentro da biblioteca Documentos */
+var SP_PASTA_WEB  = 'https://maqcampoirrigacao.sharepoint.com/sites/MCPOIRRIGACAO/Documentos%20Compartilhados/Forms/AllItems.aspx?id=%2Fsites%2FMCPOIRRIGACAO%2FDocumentos%20Compartilhados%2FDocumentos%20Compartilhados%2FCompras%2Destoque';
+var PARAM_FILE    = 'compras_pecas_parametros.json';
+var CACHE_KEY     = 'compras_pecas_cache_v2';
+var ARQ_PADRAO = {
+  metrica:    'Métrica Mensal.xlsx',
+  estoque:    'Estoque Histórico.xlsx',
+  inventario: 'Inventário_de_Peças.xlsx',
+  armazem:    'Armazém.xlsx'
+};
+var ARQ_INFO = {
+  metrica:    {label:'Faturamento e vendas', uso:'Faturamento, Curva ABC, CMV do Giro, Sortimento e Zero Vendas (abas Base_Fat., Fat_Hist_Filial, Base_Filiais)', obrig:true},
+  estoque:    {label:'Estoque histórico', uso:'Giro e evolução do estoque varejo', obrig:true},
+  inventario: {label:'Inventário de peças', uso:'Inventário, saldos da Curva ABC/Sortimento e Zero Vendas (abas Inventário e Planilha1)', obrig:true},
+  armazem:    {label:'Armazéns', uso:'Nomes dos armazéns (opcional)', obrig:false}
+};
 
 var msalInstance = null, msAccount = null, msalReady = false;
-var acesso = { emailsAutorizados:[], emailsComuns:[] };
-var acessoOk = false;          /* lista de acesso lida com sucesso (ou inexistente) */
-var pasta = null;              /* {driveId, itemId, nome, webUrl} */
-var pastaErro = '';
-var cloudEtag = null, acessoEtag = null;
-var dirtySec = {};             /* seções alteradas localmente: fat, estoque, tudo */
-var salvando = false, pendente = false, ultimaSync = null;
-var _saveTimer = null, _pollTimer = null;
+var params = { emailsAutorizados:[], emailsComuns:[], arquivos: clone(ARQ_PADRAO) };
+var paramsOk = false, paramsEtag = null;
+var pasta = null, pastaErro = '';
+var arquivosPasta = [];        /* listagem da pasta: {name, size, lastModifiedDateTime, eTag} */
+var ultimaLeitura = null, lendo = false, erroLeitura = '';
+var _pollTimer = null;
 
+function clone(o){ return JSON.parse(JSON.stringify(o)); }
 function loadMsal(){
   return new Promise(function(res, rej){
     if (window.msal) return res();
@@ -3135,250 +3299,233 @@ function getGraphToken(){
     .then(function(r){ return r.accessToken; })
     .catch(function(){ return msalInstance.acquireTokenPopup({scopes:GRAPH_SCOPES}).then(function(r){ return r.accessToken; }).catch(function(){ return null; }); });
 }
-function shareId(url){
-  var b = btoa(unescape(encodeURIComponent(url)));
-  return 'u!' + b.replace(/=+$/,'').replace(/\//g,'_').replace(/\+/g,'-');
+function gfetch(url, opts){
+  return getGraphToken().then(function(token){
+    if (!token) throw new Error('sem token');
+    opts = opts || {}; opts.headers = Object.assign({Authorization:'Bearer '+token}, opts.headers||{});
+    return fetch(url, opts);
+  });
 }
-/* resolve o link de compartilhamento da pasta → driveId + itemId */
+/* localiza a pasta no site (driveId + itemId) */
 function resolverPasta(){
   if (pasta) return Promise.resolve(pasta);
-  return getGraphToken().then(function(token){
-    if (!token){ pastaErro = 'sem token'; return null; }
-    return fetch('https://graph.microsoft.com/v1.0/shares/'+shareId(SP_PASTA_LINK)+'/driveItem', {headers:{Authorization:'Bearer '+token}})
-      .then(function(r){
-        if (!r.ok){ pastaErro = 'HTTP '+r.status; return null; }
-        return r.json().then(function(j){
-          pasta = { driveId: j.parentReference && j.parentReference.driveId, itemId: j.id, nome: j.name, webUrl: j.webUrl };
-          if (!pasta.driveId || !pasta.itemId){ pasta = null; pastaErro = 'pasta inválida'; }
-          return pasta;
-        });
-      }).catch(function(e){ pastaErro = e.message || 'rede'; return null; });
-  });
+  var enc = SP_PASTA_PATH.split('/').map(encodeURIComponent).join('/');
+  return gfetch('https://graph.microsoft.com/v1.0/sites/'+SP_HOSTNAME+':'+SP_SITE_PATH+':/drive/root:'+enc).then(function(r){
+    if (!r.ok){ pastaErro = 'HTTP '+r.status; return null; }
+    return r.json().then(function(j){
+      pasta = { driveId: j.parentReference && j.parentReference.driveId, itemId: j.id, nome: j.name, webUrl: j.webUrl || SP_PASTA_WEB };
+      if (!pasta.driveId || !pasta.itemId){ pasta = null; pastaErro = 'pasta inválida'; }
+      return pasta;
+    });
+  }).catch(function(e){ pastaErro = e.message || 'rede'; return null; });
 }
-function fileUrl(name){ return 'https://graph.microsoft.com/v1.0/drives/'+pasta.driveId+'/items/'+pasta.itemId+':/'+encodeURIComponent(name)+':'; }
+function itemUrl(name){ return 'https://graph.microsoft.com/v1.0/drives/'+pasta.driveId+'/items/'+pasta.itemId+':/'+encodeURIComponent(name)+':'; }
+function listarPasta(){
+  return gfetch('https://graph.microsoft.com/v1.0/drives/'+pasta.driveId+'/items/'+pasta.itemId+'/children?$select=name,size,lastModifiedDateTime,eTag,file&$top=200')
+    .then(function(r){ if (!r.ok) throw new Error('listar pasta: HTTP '+r.status); return r.json(); })
+    .then(function(j){ arquivosPasta = (j.value||[]).filter(function(x){ return x.file; }); return arquivosPasta; });
+}
+function acharArquivo(nome){
+  var alvo = String(nome||'').trim().toLowerCase();
+  var norm = function(s){ return s.normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().trim(); };
+  return arquivosPasta.filter(function(f){ return f.name.toLowerCase()===alvo; })[0]
+      || arquivosPasta.filter(function(f){ return norm(f.name)===norm(alvo); })[0] || null;
+}
+function baixarArquivo(f){
+  return gfetch('https://graph.microsoft.com/v1.0/drives/'+pasta.driveId+'/items/'+pasta.itemId+':/'+encodeURIComponent(f.name)+':/content')
+    .then(function(r){ if (!r.ok) throw new Error('"'+f.name+'": HTTP '+r.status); return r.arrayBuffer(); });
+}
 
-/* GET metadados (eTag); com content=true baixa o JSON. → {ok, missing, etag, data} */
-function graphGet(name, content){
-  return Promise.all([getGraphToken(), resolverPasta()]).then(function(a){
-    var token = a[0]; if (!token || !pasta) return {ok:false};
-    var base = fileUrl(name);
-    return fetch(base, {headers:{Authorization:'Bearer '+token}}).then(function(meta){
-      if (meta.status===404) return {ok:true, missing:true, data:null, etag:null};
-      if (!meta.ok) return {ok:false, status:meta.status};
-      return meta.json().then(function(mj){
-        var etag = mj.eTag || mj.cTag || null;
-        if (!content) return {ok:true, etag:etag};
-        return fetch(base+'/content', {headers:{Authorization:'Bearer '+token}}).then(function(c){
-          if (!c.ok) return {ok:false, status:c.status};
-          return c.json().then(function(data){ return {ok:true, data:data, etag:etag}; });
+/* ---------- parâmetros (único JSON gravado na pasta) ---------- */
+function lerParametros(){
+  return gfetch(itemUrl(PARAM_FILE)).then(function(meta){
+    if (meta.status===404){ paramsOk = true; paramsEtag = null; return; }
+    if (!meta.ok){ paramsOk = false; return; }
+    return meta.json().then(function(mj){
+      return gfetch(itemUrl(PARAM_FILE)+'/content').then(function(c){
+        if (!c.ok){ paramsOk = false; return; }
+        return c.json().then(function(d){
+          params = {
+            emailsAutorizados: d.emailsAutorizados || [],
+            emailsComuns: d.emailsComuns || [],
+            arquivos: Object.assign(clone(ARQ_PADRAO), d.arquivos || {})
+          };
+          paramsEtag = mj.eTag || mj.cTag || null; paramsOk = true;
         });
       });
-    }).catch(function(){ return {ok:false}; });
-  });
-}
-/* PUT com trava otimista (If-Match) → {ok, status, etag} */
-function graphPut(name, obj, etag){
-  return Promise.all([getGraphToken(), resolverPasta()]).then(function(a){
-    var token = a[0]; if (!token || !pasta) return {ok:false, status:0};
-    var headers = {Authorization:'Bearer '+token, 'Content-Type':'application/json'};
-    if (etag) headers['If-Match'] = etag;
-    return fetch(fileUrl(name)+'/content', {method:'PUT', headers:headers, body:JSON.stringify(obj)}).then(function(r){
-      if (!r.ok) return {ok:false, status:r.status};
-      return r.json().then(function(j){ return {ok:true, status:r.status, etag:j.eTag||j.cTag||null}; }).catch(function(){ return {ok:true, status:r.status, etag:null}; });
-    }).catch(function(){ return {ok:false, status:0}; });
-  });
-}
-
-/* ---------- estado dos dados ---------- */
-function dadosValidos(d){ return !!(d && d.meta && d.fat && d.fat.grid && d.giro && d.invPecas); }
-function computeBaseNonfat(){
-  var s = {};
-  function addFromGrid(grid){ Object.keys(grid||{}).forEach(function(fil){ Object.keys(grid[fil]||{}).forEach(function(m){ s[m]=1; }); }); }
-  addFromGrid(DATA.inv && DATA.inv.grid_varejo);
-  addFromGrid(DATA.compras && DATA.compras.grid);
-  if (DATA.giro && DATA.giro.months) DATA.giro.months.forEach(function(m){ s[m]=1; });
-  return Object.keys(s);
-}
-function setData(d){
-  DATA = d;
-  if (DATA){
-    FILIAIS = (DATA.meta && DATA.meta.filiais) || [];
-    BASE_NONFAT_MONTHS = computeBaseNonfat();
-  } else { FILIAIS = []; BASE_NONFAT_MONTHS = []; }
-  Object.keys(TAB_FILTERS).forEach(resetTabState);
-  updateSourceLabel(); renderFilterBar(); updateTabDots(); rerenderAll();
-}
-function salvarCache(){
-  try { localStorage.setItem(CACHE_KEY, JSON.stringify({etag:cloudEtag, data:DATA})); } catch(e){}
-}
-function lerCache(){
-  try { var c = JSON.parse(localStorage.getItem(CACHE_KEY)||'null'); return c && dadosValidos(c.data) ? c : null; } catch(e){ return null; }
-}
-function clone(o){ return JSON.parse(JSON.stringify(o)); }
-
-/* reaplica MINHAS seções alteradas sobre a versão recém-baixada do SharePoint */
-function aplicarLocalSobre(base){
-  if (dirtySec.tudo || !dadosValidos(base)) return clone(DATA);
-  var r = clone(base);
-  if (dirtySec.fat){
-    r.fat = clone(DATA.fat); r.abc = clone(DATA.abc);
-    r.giro.cmv = clone(DATA.giro.cmv);
-    r.meta.filiais = clone(DATA.meta.filiais); r.meta.periodos = clone(DATA.meta.periodos); r.meta.fonte = DATA.meta.fonte;
-  }
-  if (dirtySec.estoque){ r.giro.estoque = clone(DATA.giro.estoque); r.giro.months = clone(DATA.giro.months); }
-  r.meta.gerado_em = DATA.meta.gerado_em;
-  return r;
-}
-
-/* ---------- sincronização ---------- */
-function setSyncStatus(txt, cls){
-  var s = document.getElementById('sync-status'); if (!s) return;
-  s.textContent = txt; s.className = 'sync-status' + (cls?' '+cls:''); s.hidden = !txt;
-}
-function sincronizarNuvem(silencioso){
-  if (!msAccount) return Promise.resolve();
-  setSyncStatus('⏳ conectando…','saving');
-  return resolverPasta().then(function(p){
-    if (!p){ acessoOk = false; applyAccess(); setSyncStatus('⚠ pasta do SharePoint inacessível','warn'); return; }
-    return graphGet(ACESSO_FILE, true).then(function(ac){
-      if (ac.ok){
-        acessoOk = true; acessoEtag = ac.etag;
-        acesso = { emailsAutorizados:(ac.data && ac.data.emailsAutorizados)||[], emailsComuns:(ac.data && ac.data.emailsComuns)||[] };
-      } else acessoOk = false;
-      applyAccess();
-      if (!acessoOk){ setSyncStatus('⚠ falha ao ler a lista de acesso','warn'); return; }
-      if (nivelAcesso()==='bloqueado'){ setSyncStatus('',''); return; }
-      /* primeiro acesso (lista vazia): grava o usuário atual como admin */
-      if (!acesso.emailsAutorizados.length && !acesso.emailsComuns.length){
-        acesso.emailsAutorizados = [emailAtual()]; saveAcesso();
-      }
-      return graphGet(DADOS_FILE, true).then(function(dd){
-        if (dd.ok && dadosValidos(dd.data)){
-          var novo = Object.keys(dirtySec).length ? aplicarLocalSobre(dd.data) : dd.data;
-          cloudEtag = dd.etag; setData(novo); salvarCache();
-          ultimaSync = new Date();
-          setSyncStatus('☁ conectado','ok');
-          if (!silencioso) showToast('Dados atualizados do SharePoint.');
-        } else if (dd.ok && dd.missing){
-          cloudEtag = null;
-          setSyncStatus('⚠ sem base no SharePoint','warn');
-          if (!DATA) showToast('Nenhuma base encontrada na pasta. Um admin deve importar a base em Parâmetros.', true);
-        } else {
-          setSyncStatus('⚠ erro ao ler os dados','warn');
-        }
-        if (currentTab==='param') rerenderTab('param');
-        startPolling();
-      });
     });
-  });
+  }).catch(function(){ paramsOk = false; });
 }
-function scheduleCloudSave(){
-  if (!msAccount){ salvarCache(); return; }
-  setSyncStatus('⏳ salvando…','saving');
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(salvarDados, 600);
-}
-function salvarDados(){
-  if (!msAccount || nivelAcesso()!=='admin' || !DATA) return Promise.resolve();
-  if (salvando){ pendente = true; return Promise.resolve(); }
-  salvando = true;
-  var tent = 0;
-  function tentar(){
-    tent++;
-    return graphPut(DADOS_FILE, DATA, cloudEtag).then(function(res){
-      if (res.ok){ cloudEtag = res.etag || cloudEtag; dirtySec = {}; salvarCache(); ultimaSync = new Date(); setSyncStatus('☁ salvo no SharePoint','ok'); if (currentTab==='param') rerenderTab('param'); return true; }
-      if ((res.status===412 || res.status===409) && tent<5){
-        setSyncStatus('⟳ mesclando…','saving');
-        return graphGet(DADOS_FILE, true).then(function(dd){
-          if (dd.ok && dd.data){ cloudEtag = dd.etag; setData(aplicarLocalSobre(dd.data)); return tentar(); }
-          return false;
-        });
-      }
-      return false;
-    });
-  }
-  return tentar().then(function(ok){
-    salvando = false;
-    if (!ok){ salvarCache(); setSyncStatus('⚠ salvo só neste aparelho','warn'); showToast('Não foi possível gravar no SharePoint agora.', true); }
-    if (pendente){ pendente = false; salvarDados(); }
-  });
-}
-function startPolling(){ clearInterval(_pollTimer); _pollTimer = setInterval(puxarSeMudou, 60000); }
-function puxarSeMudou(){
-  if (!msAccount || salvando || Object.keys(dirtySec).length || nivelAcesso()==='bloqueado') return;
-  graphGet(DADOS_FILE, false).then(function(m){
-    if (!m.ok || !m.etag || m.etag===cloudEtag) return;
-    return graphGet(DADOS_FILE, true).then(function(dd){
-      if (dd.ok && dadosValidos(dd.data)){ cloudEtag = dd.etag; setData(dd.data); salvarCache(); setSyncStatus('⟳ atualizado agora','ok'); }
-    });
-  });
-}
-document.addEventListener('visibilitychange', function(){ if (!document.hidden) puxarSeMudou(); });
-
-function saveAcesso(){
-  if (!msAccount){ showToast('Entre com o Microsoft para gerenciar usuários.', true); return Promise.resolve(false); }
+function salvarParametros(){
+  if (!msAccount){ showToast('Entre com o Microsoft para alterar os parâmetros.', true); return Promise.resolve(false); }
   var tent = 0;
   function uniao(a,b){ return uniq((a||[]).concat(b||[])); }
   function tentar(){
     tent++;
-    return graphPut(ACESSO_FILE, acesso, acessoEtag).then(function(res){
-      if (res.ok){ acessoEtag = res.etag || acessoEtag; return true; }
-      if ((res.status===412 || res.status===409) && tent<5){
-        return graphGet(ACESSO_FILE, true).then(function(ac){
-          if (!ac.ok || !ac.data) return false;
-          acesso.emailsAutorizados = uniao(ac.data.emailsAutorizados, acesso.emailsAutorizados);
-          acesso.emailsComuns = uniao(ac.data.emailsComuns, acesso.emailsComuns).filter(function(e){ return acesso.emailsAutorizados.indexOf(e)<0; });
-          acessoEtag = ac.etag; return tentar();
+    var headers = {'Content-Type':'application/json'}; if (paramsEtag) headers['If-Match'] = paramsEtag;
+    return gfetch(itemUrl(PARAM_FILE)+'/content', {method:'PUT', headers:headers, body:JSON.stringify(params, null, 2)}).then(function(r){
+      if (r.ok) return r.json().then(function(j){ paramsEtag = j.eTag || j.cTag || paramsEtag; return true; }).catch(function(){ return true; });
+      if ((r.status===412 || r.status===409) && tent<5){
+        /* outro admin gravou antes: junta as listas de usuários e tenta de novo */
+        var meus = clone(params);
+        return lerParametros().then(function(){
+          params.emailsAutorizados = uniao(params.emailsAutorizados, meus.emailsAutorizados);
+          params.emailsComuns = uniao(params.emailsComuns, meus.emailsComuns).filter(function(e){ return lower(params.emailsAutorizados).indexOf(e.toLowerCase())<0; });
+          params.arquivos = meus.arquivos;
+          return tentar();
         });
       }
       return false;
-    });
+    }).catch(function(){ return false; });
   }
-  return tentar().then(function(ok){ if (!ok) showToast('Não foi possível salvar os usuários agora.', true); return ok; });
+  return tentar().then(function(ok){ if (!ok) showToast('Não foi possível salvar os parâmetros agora.', true); return ok; });
 }
+
+/* ---------- leitura das planilhas e cálculo da base ---------- */
+function setSyncStatus(txt, cls){
+  var s = document.getElementById('sync-status'); if (!s) return;
+  s.textContent = txt; s.className = 'sync-status' + (cls?' '+cls:''); s.hidden = !txt;
+}
+function hojeSP(){ return todayStr().slice(0,10); }
+function dataSP(iso){
+  if (!iso) return '';
+  var p = {}; new Intl.DateTimeFormat('en-CA', {timeZone:'America/Sao_Paulo', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date(iso)).forEach(function(x){ p[x.type]=x.value; });
+  return p.year+'-'+p.month+'-'+p.day;
+}
+function assinatura(sel){ return Object.keys(sel).sort().map(function(k){ var f = sel[k]; return k+'='+(f ? f.name+'@'+f.eTag : '-'); }).join(';') + '|' + hojeSP().slice(0,7); }
+function setData(d){
+  DATA = d;
+  if (DATA){ FILIAIS = (DATA.meta && DATA.meta.filiais) || []; BASE_NONFAT_MONTHS = computeBaseNonfat(); }
+  else { FILIAIS = []; BASE_NONFAT_MONTHS = []; }
+  Object.keys(TAB_FILTERS).forEach(resetTabState);
+  updateSourceLabel(); renderFilterBar(); updateTabDots(); rerenderAll();
+}
+function computeBaseNonfat(){
+  var s = {};
+  (DATA.giro && DATA.giro.months || []).forEach(function(m){ s[m]=1; });
+  Object.keys(DATA.compras && DATA.compras.grid || {}).forEach(function(f){ Object.keys(DATA.compras.grid[f]).forEach(function(m){ s[m]=1; }); });
+  return Object.keys(s);
+}
+/* lê as planilhas da pasta; usa o cache local se nenhum arquivo mudou (forcar = ignora o cache) */
+function carregarPlanilhas(forcar){
+  if (lendo) return Promise.resolve();
+  if (typeof XLSX === 'undefined'){ showToast('Não foi possível carregar o leitor de planilhas (sem conexão?).', true); return Promise.resolve(); }
+  lendo = true; erroLeitura = '';
+  setSyncStatus('⏳ verificando planilhas…','saving');
+  setBusy(true);
+  return listarPasta().then(function(){
+    var sel = {}, faltando = [];
+    Object.keys(ARQ_PADRAO).forEach(function(k){
+      sel[k] = acharArquivo(params.arquivos[k]);
+      if (!sel[k] && ARQ_INFO[k].obrig) faltando.push(params.arquivos[k]);
+    });
+    if (faltando.length) throw new Error('Arquivo(s) não encontrado(s) na pasta: '+faltando.join(', '));
+    var sig = assinatura(sel);
+    var c = null; try { c = JSON.parse(localStorage.getItem(CACHE_KEY)||'null'); } catch(e){}
+    if (!forcar && c && c.sig===sig && c.data){
+      if (!DATA || DATA.meta.sig!==sig) setData(c.data);
+      return 'cache';
+    }
+    setSyncStatus('⏳ lendo planilhas…','saving');
+    var chaves = Object.keys(sel).filter(function(k){ return sel[k]; });
+    return Promise.all(chaves.map(function(k){ return baixarArquivo(sel[k]); })).then(function(bufs){
+      setSyncStatus('⏳ calculando…','saving');
+      return new Promise(function(res){ setTimeout(res, 30); }).then(function(){
+        var wb = {};
+        chaves.forEach(function(k, i){ wb[k] = XLSX.read(bufs[i], {type:'array', cellDates:true}); });
+        var fontes = {}; chaves.forEach(function(k){ fontes[k] = sel[k].name; });
+        var base = montarBase({ metrica:wb.metrica, estoque:wb.estoque, inventario:wb.inventario, armazem:wb.armazem||null,
+          invData: dataSP(sel.inventario.lastModifiedDateTime) || hojeSP(), hoje: hojeSP(), agora: todayStr(), fontes: fontes });
+        base.meta.sig = sig;
+        base.meta.arquivos = chaves.map(function(k){ return {chave:k, nome:sel[k].name, modificado:sel[k].lastModifiedDateTime, tamanho:sel[k].size}; });
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify({sig:sig, data:base})); } catch(e){}
+        setData(base);
+        return 'lido';
+      });
+    });
+  }).then(function(modo){
+    ultimaLeitura = new Date();
+    setSyncStatus(modo==='lido' ? '☁ planilhas lidas agora' : '☁ conectado','ok');
+    if (forcar) showToast('Planilhas recarregadas da pasta.');
+  }).catch(function(e){
+    console.error(e); erroLeitura = e.message || String(e);
+    setSyncStatus('⚠ erro ao ler as planilhas','warn');
+    showToast(erroLeitura, true);
+  }).then(function(){
+    lendo = false; setBusy(false);
+    if (currentTab==='param' || !DATA) rerenderTab(currentTab);
+  });
+}
+function setBusy(b){
+  var bt = document.getElementById('update-data-btn'); if (!bt) return;
+  bt.disabled = b; bt.classList.toggle('is-loading', b);
+  document.getElementById('update-data-label').textContent = b ? 'Lendo…' : 'Atualizar dados';
+}
+function conectar(){
+  if (!msAccount) return Promise.resolve();
+  setSyncStatus('⏳ conectando…','saving');
+  return resolverPasta().then(function(p){
+    if (!p){ paramsOk = false; applyAccess(); setSyncStatus('⚠ pasta do SharePoint inacessível','warn'); return; }
+    return lerParametros().then(function(){
+      applyAccess();
+      if (!paramsOk){ setSyncStatus('⚠ falha ao ler os parâmetros','warn'); return; }
+      if (nivelAcesso()==='bloqueado'){ setSyncStatus('',''); return; }
+      if (!params.emailsAutorizados.length && !params.emailsComuns.length){
+        params.emailsAutorizados = [emailAtual()]; salvarParametros();   /* primeiro acesso vira admin */
+      }
+      startPolling();
+      return carregarPlanilhas(false);
+    });
+  });
+}
+/* a cada 2 min confere se alguma planilha ou os parâmetros mudaram */
+function startPolling(){ clearInterval(_pollTimer); _pollTimer = setInterval(verificarMudancas, 120000); }
+function verificarMudancas(){
+  if (!msAccount || lendo || nivelAcesso()==='bloqueado' || !pasta) return;
+  var antes = paramsEtag;
+  lerParametros().then(function(){ if (paramsEtag!==antes){ applyAccess(); if (currentTab==='param') rerenderTab('param'); } });
+  carregarPlanilhas(false);
+}
+document.addEventListener('visibilitychange', function(){ if (!document.hidden) verificarMudancas(); });
 
 /* ---------- níveis de acesso ---------- */
 function emailAtual(){ return msAccount ? String(msAccount.username||'').toLowerCase() : ''; }
 function lower(l){ return (l||[]).map(function(x){ return String(x).toLowerCase(); }); }
 function nivelAcesso(){
   if (!msAccount) return msalReady ? 'deslogado' : 'local';
-  if (!acessoOk) return 'bloqueado';
+  if (!paramsOk) return 'bloqueado';
   var e = emailAtual();
-  if (lower(acesso.emailsAutorizados).indexOf(e)>=0) return 'admin';
-  if (lower(acesso.emailsComuns).indexOf(e)>=0) return 'comum';
-  if (!acesso.emailsAutorizados.length && !acesso.emailsComuns.length) return 'admin'; /* primeiro acesso */
+  if (lower(params.emailsAutorizados).indexOf(e)>=0) return 'admin';
+  if (lower(params.emailsComuns).indexOf(e)>=0) return 'comum';
+  if (!params.emailsAutorizados.length && !params.emailsComuns.length) return 'admin';
   return 'bloqueado';
 }
 function applyAccess(){
   var nivel = nivelAcesso();
-  var ovLogin = document.getElementById('overlay-login'), ovNeg = document.getElementById('overlay-negado');
-  ovLogin.hidden = nivel!=='deslogado';
-  ovNeg.hidden = nivel!=='bloqueado' || !msAccount;
+  document.getElementById('overlay-login').hidden = nivel!=='deslogado';
+  document.getElementById('overlay-negado').hidden = !(nivel==='bloqueado' && msAccount);
   if (nivel==='bloqueado' && msAccount){
     document.getElementById('overlay-email-info').textContent = 'Logado como: '+emailAtual();
     document.getElementById('overlay-negado-msg').textContent = !pasta
-      ? 'Não consegui acessar a pasta do SharePoint ('+(pastaErro||'erro')+'). Verifique se sua conta tem acesso à pasta e tente de novo.'
-      : (!acessoOk ? 'Não consegui ler a lista de usuários no SharePoint. Tente novamente.' : 'Seu e-mail ainda não tem acesso a este painel. Peça a um administrador para cadastrá-lo na aba Parâmetros.');
+      ? 'Não consegui acessar a pasta Compras-estoque no SharePoint ('+(pastaErro||'erro')+'). Verifique se sua conta tem acesso à pasta.'
+      : (!paramsOk ? 'Não consegui ler os parâmetros de acesso na pasta. Tente novamente.' : 'Seu e-mail ainda não tem acesso a este painel. Peça a um administrador para cadastrá-lo na aba Parâmetros.');
   }
   var isAdmin = nivel==='admin' || nivel==='local';
   document.body.classList.toggle('is-admin', isAdmin);
   var tp = TABS.filter(function(t){ return t.id==='param'; })[0];
   if (tp) tp._btn.hidden = !isAdmin;
-  if (!isAdmin && currentTab==='param'){ TABS[0]._btn.click(); }
+  if (!isAdmin && currentTab==='param') TABS[0]._btn.click();
   updateLoginUI();
 }
 function updateLoginUI(){
-  var lbl = document.getElementById('ms-login-label');
-  if (!lbl) return;
-  if (msAccount) lbl.textContent = (msAccount.name || msAccount.username);
-  else lbl.textContent = msalReady ? 'Entrar com Microsoft' : 'Modo local';
+  var lbl = document.getElementById('ms-login-label'); if (!lbl) return;
+  lbl.textContent = msAccount ? (msAccount.name || msAccount.username) : (msalReady ? 'Entrar com Microsoft' : 'Modo local');
   document.getElementById('btn-ms-login').title = msAccount ? 'Logado como '+msAccount.username+' — clique para sair' : 'Entrar com a conta Microsoft da MAQCAMPO';
 }
 function resetAuthState(){
-  msAccount = null; cloudEtag = null; acessoEtag = null; acessoOk = false; pasta = null;
-  acesso = { emailsAutorizados:[], emailsComuns:[] }; dirtySec = {};
-  salvando = false; pendente = false;
-  clearInterval(_pollTimer); clearTimeout(_saveTimer);
+  msAccount = null; paramsEtag = null; paramsOk = false; pasta = null; arquivosPasta = [];
+  params = { emailsAutorizados:[], emailsComuns:[], arquivos: clone(ARQ_PADRAO) };
+  clearInterval(_pollTimer);
   try { localStorage.removeItem(CACHE_KEY); } catch(e){}
   setSyncStatus('','');
 }
@@ -3388,8 +3535,8 @@ function fazerLogin(){
   msalInstance.loginPopup({ scopes:GRAPH_SCOPES, prompt:'select_account' }).then(function(resp){
     msAccount = resp.account;
     try { msalInstance.setActiveAccount(msAccount); } catch(e){}
-    updateLoginUI();
-    return sincronizarNuvem(true).then(function(){ showToast('Logado como '+msAccount.username); });
+    updateLoginUI(); applyAccess(); rerenderAll();
+    return conectar().then(function(){ showToast('Logado como '+msAccount.username); });
   }).catch(function(e){
     updateLoginUI();
     var code = (e && (e.errorCode||e.message)) || '';
@@ -3401,10 +3548,7 @@ function fazerLogin(){
 function fazerLogout(){
   var inst = msalInstance;
   resetAuthState(); setData(null); applyAccess();
-  if (inst){
-    try { if (inst.clearCache) inst.clearCache(); } catch(e){}
-    try { inst.setActiveAccount(null); } catch(e){}
-  }
+  if (inst){ try { if (inst.clearCache) inst.clearCache(); } catch(e){} try { inst.setActiveAccount(null); } catch(e){} }
   showToast('Sessão encerrada.');
 }
 document.getElementById('btn-ms-login').addEventListener('click', function(){
@@ -3413,7 +3557,12 @@ document.getElementById('btn-ms-login').addEventListener('click', function(){
 });
 document.getElementById('overlay-login-btn').addEventListener('click', fazerLogin);
 document.getElementById('overlay-sair-btn').addEventListener('click', fazerLogout);
-document.getElementById('overlay-retry-btn').addEventListener('click', function(){ pasta = null; sincronizarNuvem(false); });
+document.getElementById('overlay-retry-btn').addEventListener('click', function(){ pasta = null; conectar(); });
+document.getElementById('update-data-btn').addEventListener('click', function(){
+  if (!msAccount){ showToast('Entre com o Microsoft primeiro.', true); return; }
+  if (!pasta){ conectar(); return; }
+  carregarPlanilhas(true);
+});
 
 function initAuth(){
   return loadMsal().then(function(){
@@ -3424,20 +3573,12 @@ function initAuth(){
   }).then(function(){
     msalReady = true;
     var accs = msalInstance.getAllAccounts();
-    if (accs.length){
-      msAccount = accs[0];
-      var c = lerCache();                 /* mostra o último cache enquanto confere a nuvem */
-      if (c){ cloudEtag = c.etag; setData(c.data); }
-      updateLoginUI();
-      return sincronizarNuvem(true);
-    }
+    if (accs.length){ msAccount = accs[0]; updateLoginUI(); return conectar(); }
     applyAccess();
   }).catch(function(){
-    /* sem MSAL (ex.: arquivo aberto direto no computador) → modo local, sem bloqueio */
     msalReady = false; msalInstance = null;
-    var c = lerCache(); if (c) setData(c.data);
     applyAccess();
-    setSyncStatus('modo local — dados só neste aparelho','warn');
+    setSyncStatus('modo local — login indisponível','warn');
   });
 }
 
@@ -3448,13 +3589,13 @@ function buildParametros(){
   var grid = el('div','chart-grid param-grid');
 
   /* --- Usuários --- */
-  var cU = chartCard('Usuários e acesso', 2, 'admin vê Parâmetros e atualiza os dados · comum só visualiza');
+  var cU = chartCard('Usuários e acesso', 2, 'admin vê Parâmetros · comum só visualiza');
   var who = el('div','param-who');
   who.innerHTML = '<div><span>Usuário logado</span><b>'+esc(emailAtual()||'— (modo local)')+'</b></div>'+
     '<div><span>Nível</span><b>'+esc(nivel==='local'?'local (sem login)':nivel)+'</b></div>';
   cU.body.appendChild(who);
   if (!msAccount){
-    cU.body.appendChild(el('div','param-note','Entre com a conta Microsoft para gerenciar os usuários. A lista fica no arquivo '+esc(ACESSO_FILE)+' da pasta do SharePoint.'));
+    cU.body.appendChild(el('div','param-note','Entre com a conta Microsoft para gerenciar os usuários.'));
   } else {
     var cols = el('div','param-cols');
     cols.appendChild(listaUsuarios('Administradores', 'emailsAutorizados', 'admin'));
@@ -3463,80 +3604,78 @@ function buildParametros(){
   }
   grid.appendChild(cU.card);
 
-  /* --- Armazenamento --- */
-  var cS = chartCard('Armazenamento', 1, 'SharePoint MCPOIRRIGACAO');
+  /* --- Pasta --- */
+  var cS = chartCard('Pasta no SharePoint', 1, 'Compras-estoque');
   var info = el('div','param-kv');
   info.innerHTML =
-    '<div><span>Pasta</span><b>'+(pasta ? '<a href="'+esc(pasta.webUrl)+'" target="_blank" rel="noopener">'+esc(pasta.nome)+'</a>' : '<a href="'+esc(SP_PASTA_LINK)+'" target="_blank" rel="noopener">abrir pasta</a>'+(pastaErro?' · <span class="t-bad">'+esc(pastaErro)+'</span>':''))+'</b></div>'+
-    '<div><span>Arquivo de dados</span><b>'+esc(DADOS_FILE)+'</b></div>'+
-    '<div><span>Arquivo de acesso</span><b>'+esc(ACESSO_FILE)+'</b></div>'+
-    '<div><span>Última sincronização</span><b>'+(ultimaSync? esc(ultimaSync.toLocaleString('pt-BR')) : '—')+'</b></div>';
+    '<div><span>Pasta</span><b><a href="'+esc(pasta ? pasta.webUrl : SP_PASTA_WEB)+'" target="_blank" rel="noopener">'+esc(pasta ? pasta.nome : 'Compras-estoque')+'</a>'+(!pasta && pastaErro ? ' · <span class="t-bad">'+esc(pastaErro)+'</span>' : '')+'</b></div>'+
+    '<div><span>Parâmetros gravados em</span><b>'+esc(PARAM_FILE)+'</b></div>'+
+    '<div><span>Última leitura das planilhas</span><b>'+(ultimaLeitura? esc(ultimaLeitura.toLocaleString('pt-BR')) : '—')+'</b></div>'+
+    '<div><span>Base calculada em</span><b>'+esc(DATA ? fmtDateTime(DATA.meta.gerado_em) : '—')+'</b></div>';
   cS.body.appendChild(info);
-  var bSync = el('button','btn btn-sm param-btn','Sincronizar agora'); bSync.type='button';
-  bSync.addEventListener('click', function(){ if (!msAccount){ showToast('Entre com o Microsoft primeiro.', true); return; } pasta = null; sincronizarNuvem(false); });
-  cS.body.appendChild(bSync);
+  var bR = el('button','btn btn-sm param-btn','Recarregar planilhas agora'); bR.type='button';
+  bR.addEventListener('click', function(){ if (!msAccount){ showToast('Entre com o Microsoft primeiro.', true); return; } pasta = null; resolverPasta().then(function(){ carregarPlanilhas(true); }); });
+  cS.body.appendChild(bR);
   grid.appendChild(cS.card);
 
-  /* --- Base de dados --- */
-  var cB = chartCard('Base de dados', 3, '');
-  var m = (DATA && DATA.meta) || {};
-  var kv = el('div','param-kv param-kv-row');
-  kv.innerHTML =
-    '<div><span>Situação</span><b>'+(DATA?'carregada':'<span class="t-bad">sem base</span>')+'</b></div>'+
-    '<div><span>Atualizada em</span><b>'+esc(fmtDateTime(m.gerado_em))+'</b></div>'+
-    '<div><span>Última planilha importada</span><b>'+esc(m.fonte||'—')+'</b></div>'+
-    '<div><span>Faturamento</span><b>'+(DATA && DATA.fat.grid.months.length ? esc(monthLabel(DATA.fat.grid.months[0])+' a '+monthLabel(DATA.fat.grid.months[DATA.fat.grid.months.length-1])) : '—')+'</b></div>'+
-    '<div><span>Estoque histórico</span><b>'+(DATA && DATA.giro.months.length ? esc(monthLabel(DATA.giro.months[0])+' a '+monthLabel(DATA.giro.months[DATA.giro.months.length-1])) : '—')+'</b></div>'+
-    '<div><span>Inventário (posição)</span><b>'+esc(DATA && DATA.zv ? fmtDateBR(DATA.zv.invData) : '—')+'</b></div>';
-  cB.body.appendChild(kv);
-  cB.body.appendChild(el('div','param-note',
-    '<b>Atualizar dados</b> (topo da tela): envie o <b>Métrica Mensal.xlsx</b> (Faturamento, Curva ABC e CMV do Giro) e/ou o <b>Estoque Histórico.xlsx</b> (estoque do Giro). '+
-    'O painel recalcula e grava a base no SharePoint para todos os usuários. '+
-    'Inventário, Sortimento e Zero Vendas usam a posição do inventário que está na base — para trocá-la, importe uma base completa nova abaixo.'));
+  /* --- Arquivos de origem --- */
+  var cA = chartCard('Planilhas de origem', 3, 'lidas da pasta a cada acesso · o painel não altera esses arquivos');
+  if (erroLeitura) cA.body.appendChild(el('div','param-note','<span class="t-bad">⚠ '+esc(erroLeitura)+'</span>'));
+  var sc = el('div','chart-scroll'); sc.style.maxHeight = 'none';
+  var t = el('table','data-table');
+  t.innerHTML = '<thead><tr><th>Fonte</th><th>Nome do arquivo na pasta</th><th>Situação</th><th>Modificado em</th><th class="num">Tamanho</th><th>Usado em</th></tr></thead>';
+  var tb = el('tbody'); var inputs = {};
+  Object.keys(ARQ_PADRAO).forEach(function(k){
+    var f = acharArquivo(params.arquivos[k]);
+    var tr = el('tr');
+    tr.innerHTML = '<td><b>'+esc(ARQ_INFO[k].label)+'</b>'+(ARQ_INFO[k].obrig?'':' <span class="chip muted">opcional</span>')+'</td><td class="param-file"></td>'+
+      '<td>'+(f ? '<span class="chip good">encontrado</span>' : (arquivosPasta.length ? '<span class="chip '+(ARQ_INFO[k].obrig?'bad':'warn')+'">não encontrado</span>' : '<span class="chip muted">—</span>'))+'</td>'+
+      '<td>'+(f ? esc(new Date(f.lastModifiedDateTime).toLocaleString('pt-BR')) : '—')+'</td>'+
+      '<td class="num">'+(f ? (f.size/1024>1024 ? (f.size/1048576).toLocaleString('pt-BR',{maximumFractionDigits:1})+' MB' : Math.round(f.size/1024)+' KB') : '—')+'</td>'+
+      '<td class="param-uso">'+esc(ARQ_INFO[k].uso)+'</td>';
+    var inp = el('input','abc-search'); inp.value = params.arquivos[k]; inp.setAttribute('list','lista-arquivos-pasta');
+    inputs[k] = inp; tr.querySelector('.param-file').appendChild(inp);
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb); sc.appendChild(t); cA.body.appendChild(sc);
+  var dl = document.createElement('datalist'); dl.id = 'lista-arquivos-pasta';
+  arquivosPasta.forEach(function(f){ var o = document.createElement('option'); o.value = f.name; dl.appendChild(o); });
+  cA.body.appendChild(dl);
+  if (arquivosPasta.length){
+    var outros = arquivosPasta.filter(function(f){ return f.name!==PARAM_FILE && !Object.keys(ARQ_PADRAO).some(function(k){ var a = acharArquivo(params.arquivos[k]); return a && a.name===f.name; }); });
+    if (outros.length) cA.body.appendChild(el('div','param-note','Outros arquivos na pasta (não usados pelo painel): '+outros.map(function(f){ return esc(f.name); }).join(', ')+'.'));
+  }
   var tools = el('div','abc-tools');
-  var inp = document.createElement('input'); inp.type='file'; inp.accept='.json,application/json'; inp.hidden = true;
-  var bImp = el('button','btn btn-sm param-btn','Importar base completa (.json)'); bImp.type='button';
-  var bExp = el('button','btn btn-sm param-btn param-btn-ghost','Baixar base (.json)'); bExp.type='button';
-  bImp.addEventListener('click', function(){ inp.click(); });
-  inp.addEventListener('change', function(){
-    var f = inp.files && inp.files[0]; inp.value=''; if (!f) return;
-    var rd = new FileReader();
-    rd.onload = function(){
-      var d; try { d = JSON.parse(rd.result); } catch(e){ d = null; }
-      if (!dadosValidos(d)){ showToast('Arquivo inválido: não é uma base do painel.', true); return; }
-      if (DATA && !confirm('Substituir a base atual por "'+f.name+'" para todos os usuários?')) return;
-      setData(d); dirtySec.tudo = true; scheduleCloudSave();
-      showToast('Base importada'+(msAccount?' — gravando no SharePoint…':' (modo local).'));
-    };
-    rd.readAsText(f);
+  var bS = el('button','btn btn-sm param-btn','Salvar nomes e recarregar'); bS.type='button';
+  var bP = el('button','btn btn-sm param-btn param-btn-ghost','Restaurar nomes padrão'); bP.type='button';
+  bS.addEventListener('click', function(){
+    var novo = {}; Object.keys(inputs).forEach(function(k){ novo[k] = inputs[k].value.trim() || ARQ_PADRAO[k]; });
+    params.arquivos = novo;
+    salvarParametros().then(function(ok){ if (ok){ showToast('Parâmetros salvos.'); carregarPlanilhas(true); } });
   });
-  bExp.addEventListener('click', function(){
-    if (!DATA){ showToast('Não há base carregada.', true); return; }
-    var blob = new Blob([JSON.stringify(DATA)], {type:'application/json'});
-    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = DADOS_FILE;
-    document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 500);
-  });
-  tools.appendChild(bImp); tools.appendChild(bExp); tools.appendChild(inp);
-  cB.body.appendChild(tools);
-  grid.appendChild(cB.card);
+  bP.addEventListener('click', function(){ Object.keys(inputs).forEach(function(k){ inputs[k].value = ARQ_PADRAO[k]; }); });
+  tools.appendChild(bS); tools.appendChild(bP);
+  cA.body.appendChild(tools);
+  cA.body.appendChild(el('div','param-note','Para atualizar o painel, substitua as planilhas na pasta mantendo o mesmo nome (ou ajuste o nome aqui). O painel percebe a mudança sozinho em até 2 minutos, ou na hora pelo botão <b>Atualizar dados</b>.'));
+  grid.appendChild(cA.card);
 
   panel.appendChild(grid);
   return panel;
 }
 function listaUsuarios(titulo, campo, tipo){
   var box = el('div','param-users');
-  box.appendChild(el('div','abc-subtitle', esc(titulo)+' <span class="n">('+acesso[campo].length+')</span>'));
+  box.appendChild(el('div','abc-subtitle', esc(titulo)+' <span class="n">('+params[campo].length+')</span>'));
   var ul = el('div','param-list');
-  if (!acesso[campo].length) ul.appendChild(el('div','param-note', tipo==='admin' ? 'Nenhum admin — o primeiro login vira admin.' : 'Nenhum usuário comum cadastrado.'));
-  acesso[campo].forEach(function(em, i){
+  if (!params[campo].length) ul.appendChild(el('div','param-note', tipo==='admin' ? 'Nenhum admin — o primeiro login vira admin.' : 'Nenhum usuário comum cadastrado.'));
+  params[campo].forEach(function(em, i){
     var row = el('div','param-user');
     row.innerHTML = '<span>'+esc(em)+(em.toLowerCase()===emailAtual()?' <span class="chip info">você</span>':'')+'</span>';
     var rm = el('button','btn btn-sm param-rm','remover'); rm.type='button';
     rm.addEventListener('click', function(){
+      if (tipo==='admin' && params.emailsAutorizados.length===1){ showToast('Mantenha pelo menos um administrador.', true); return; }
       if (tipo==='admin' && em.toLowerCase()===emailAtual() && !confirm('Remover você mesmo dos administradores? Você perderá o acesso aos Parâmetros.')) return;
-      if (tipo==='admin' && acesso.emailsAutorizados.length===1){ showToast('Mantenha pelo menos um administrador.', true); return; }
-      acesso[campo].splice(i,1);
-      saveAcesso().then(function(){ applyAccess(); if (currentTab==='param') rerenderTab('param'); });
+      params[campo].splice(i,1);
+      salvarParametros().then(function(){ applyAccess(); if (currentTab==='param') rerenderTab('param'); });
     });
     row.appendChild(rm); ul.appendChild(row);
   });
@@ -3547,10 +3686,10 @@ function listaUsuarios(titulo, campo, tipo){
   function adicionar(){
     var em = inp.value.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showToast('Informe um e-mail válido.', true); return; }
-    if (tipo==='comum' && lower(acesso.emailsAutorizados).indexOf(em)>=0){ showToast('Esse e-mail já é admin.', true); return; }
-    if (lower(acesso[campo]).indexOf(em)<0) acesso[campo].push(em);
-    if (tipo==='admin') acesso.emailsComuns = acesso.emailsComuns.filter(function(x){ return x.toLowerCase()!==em; });
-    saveAcesso().then(function(ok){ if (ok) showToast('Usuário adicionado.'); if (currentTab==='param') rerenderTab('param'); });
+    if (tipo==='comum' && lower(params.emailsAutorizados).indexOf(em)>=0){ showToast('Esse e-mail já é admin.', true); return; }
+    if (lower(params[campo]).indexOf(em)<0) params[campo].push(em);
+    if (tipo==='admin') params.emailsComuns = params.emailsComuns.filter(function(x){ return x.toLowerCase()!==em; });
+    salvarParametros().then(function(ok){ if (ok) showToast('Usuário adicionado.'); if (currentTab==='param') rerenderTab('param'); });
   }
   b.addEventListener('click', adicionar);
   inp.addEventListener('keydown', function(e){ if (e.key==='Enter') adicionar(); });
