@@ -628,7 +628,10 @@ var TAB_FILTERS = {
     {key:'ano', label:'Ano', all:'Todos', plural:'anos', options:function(){
       return optsFromList(uniq(DATA.fat.grid.months.map(function(m){ return m.slice(0,4); })).sort());
     }},
-    {key:'mes', label:'Mês', all:'Todos', plural:'meses', options:function(){ return MES_OPTS; }}
+    {key:'mes', label:'Mês', all:'Todos', plural:'meses', options:function(){ return MES_OPTS; }},
+    {key:'canal', label:'Tipo de venda', all:'Todos', plural:'tipos', options:function(){
+      return [{value:'bal', label:'Peças Balcão'}, {value:'os', label:'Peças Serviços'}];
+    }}
   ],
   abc: [
     {key:'filial', label:'Filial', all:'Todas', plural:'filiais', options:function(){
@@ -1291,15 +1294,40 @@ function pctColor(p, goodLow){
 
 /* ================= TAB BUILDERS ================= */
 
+/* filtro Tipo de venda: Peças Serviços = linhas da Base_Fat. com nº de O.S. (Num_OS);
+   Peças Balcão = total − Serviços (o total vem do Fat_Hist_Filial, então Balcão + Serviços = total) */
+function fatCanalData(){
+  var F = DATA.fat, O = F.os || {grid:{}, devol:{}, clients_os:{}, clients_bal:F.clients_grid||{}};
+  var totGrid = F.grid.grid, totDevol = (F.devol_grid && F.devol_grid.grid) || {};
+  var hasBal = fHas('fat','canal','bal'), hasOs = fHas('fat','canal','os');
+  if (hasBal && hasOs) return { grid: totGrid, clients: F.clients_grid || {}, devol: totDevol };
+  if (!hasBal && !hasOs) return { grid: {}, clients: {}, devol: {} };
+  if (hasOs) return { grid: O.grid || {}, clients: O.clients_os || {}, devol: O.devol || {} };
+  var g = {}, d = {};
+  Object.keys(totGrid).forEach(function(fil){
+    g[fil] = {};
+    Object.keys(totGrid[fil]).forEach(function(m){
+      var t = totGrid[fil][m], o = (O.grid[fil] || {})[m];
+      g[fil][m] = o ? { v:t.v-o.v, c:t.c-o.c, i:t.i-o.i, l:t.l-o.l, q:t.q-o.q } : t;
+    });
+  });
+  Object.keys(totDevol).forEach(function(fil){
+    d[fil] = {};
+    Object.keys(totDevol[fil]).forEach(function(m){ d[fil][m] = totDevol[fil][m] - (((O.devol||{})[fil] || {})[m] || 0); });
+  });
+  return { grid: g, clients: O.clients_bal || {}, devol: d };
+}
+
 function buildFaturamento(){
   var sel = fSelOrAll('fat','filial');
   var allMonths = DATA.fat.grid.months;
   var months = fatMonths();
-  var grid = DATA.fat.grid.grid;
+  var canal = fatCanalData();
+  var grid = canal.grid;
   var comprasGrid = DATA.compras && DATA.compras.grid || {};
-  var clientsGrid = DATA.fat.clients_grid || {};
+  var clientsGrid = canal.clients;
 
-  var devolGrid = (DATA.fat.devol_grid && DATA.fat.devol_grid.grid) || {};
+  var devolGrid = canal.devol;
 
   var kpi = {valor:0, impostos:0, cmv:0, devolucoes:0};
   var clientSet = {};
@@ -4337,7 +4365,7 @@ var TAB_NOTES = {
     var a = DATA.abc || {};
     return a.ini ? 'Base_Fat. · últimos 12 meses ('+monthLabel(a.ini)+' a '+monthLabel(a.fim)+') · classes calculadas sobre as filiais selecionadas' : 'Base_Fat.';
   },
-  fat: 'Gráficos por ano e dos últimos 13 meses seguem só o filtro de Filial',
+  fat: 'Gráficos por ano e dos últimos 13 meses seguem Filial e Tipo de venda · Peças Serviços = vendas com nº de O.S. (Base_Fat., coluna Num_OS)',
   inv: 'Posição atual do inventário (Inventário_de_Peças.xlsx)',
   giro: function(){
     var w = giroWindow();
@@ -4478,6 +4506,7 @@ function parseFaturamentoWorkbook(wb){
   var clientsGrid = {};
   var extraMonthsSet = {};
   var devolGrid = {};
+  var osGrid = {}, osDevol = {}, osClients = {}, balClients = {};
   if (headerRowIdx >= 0){
     var idxLoja = header.indexOf('Loja');
     var idxAnoMes = header.indexOf('Ano_Mes');
@@ -4488,7 +4517,9 @@ function parseFaturamentoWorkbook(wb){
     var idxImpostos = header.indexOf('Impostos');
     var idxLB = header.indexOf('LB');
     var idxTipo = header.indexOf('Tipo');
+    var idxOS = header.indexOf('Num_OS');
     var clientSets = {};
+    var cliOsSets = {}, cliBalSets = {};
     var rawAgg = {};
     var cmvGrid = {};
     for (var rr=headerRowIdx+1; rr<faoa.length; rr++){
@@ -4517,11 +4548,32 @@ function parseFaturamentoWorkbook(wb){
       cmvGrid[fil2] = cmvGrid[fil2] || {};
       cmvGrid[fil2][mk2] = (cmvGrid[fil2][mk2]||0) + (Number(row3[idxCMV])||0);
 
+      /* Peças Serviços = linha com nº de O.S. (coluna Num_OS); sem O.S. = Peças Balcão */
+      var isOS = idxOS>=0 && row3[idxOS]!=null && String(row3[idxOS]).trim()!=='';
+      if (isOS){
+        osGrid[fil2] = osGrid[fil2] || {};
+        var oc = osGrid[fil2][mk2] || {v:0,c:0,i:0,l:0,q:0};
+        oc.v += Number(row3[idxValor])||0;
+        oc.c += Number(row3[idxCMV])||0;
+        oc.i += Number(row3[idxImpostos])||0;
+        oc.l += Number(row3[idxLB])||0;
+        oc.q += Number(row3[idxQtde])||0;
+        osGrid[fil2][mk2] = oc;
+        if (idxTipo>=0 && row3[idxTipo]==='D'){
+          osDevol[fil2] = osDevol[fil2] || {};
+          osDevol[fil2][mk2] = (osDevol[fil2][mk2]||0) + Math.abs(Number(row3[idxValor])||0);
+        }
+      }
+
       var cliente = row3[idxCliente];
       if (cliente != null){
         clientSets[fil2] = clientSets[fil2] || {};
         clientSets[fil2][mk2] = clientSets[fil2][mk2] || {};
         clientSets[fil2][mk2][cliente] = 1;
+        var cs = isOS ? cliOsSets : cliBalSets;
+        cs[fil2] = cs[fil2] || {};
+        cs[fil2][mk2] = cs[fil2][mk2] || {};
+        cs[fil2][mk2][cliente] = 1;
       }
 
       if (idxTipo>=0 && row3[idxTipo]==='D'){
@@ -4535,6 +4587,16 @@ function parseFaturamentoWorkbook(wb){
         clientsGrid[fil3][m3] = Object.keys(clientSets[fil3][m3]);
       });
     });
+    function setsToLists(sets){
+      var out = {};
+      Object.keys(sets).forEach(function(f){
+        out[f] = {};
+        Object.keys(sets[f]).forEach(function(m){ out[f][m] = Object.keys(sets[f][m]); });
+      });
+      return out;
+    }
+    osClients = setsToLists(cliOsSets);
+    balClients = setsToLists(cliBalSets);
     Object.keys(rawAgg).forEach(function(fil4){
       grid[fil4] = grid[fil4] || {};
       Object.keys(rawAgg[fil4]).forEach(function(m4){
@@ -4549,12 +4611,14 @@ function parseFaturamentoWorkbook(wb){
   Object.keys(devolGrid).forEach(function(f){ Object.keys(devolGrid[f]).forEach(function(m){ devolMonths[m]=1; }); });
 
   var abc = headerRowIdx >= 0 ? computeAbcFromAoa(faoa, headerRowIdx, header) : null;
-  return { months: months, grid: grid, clientsGrid: clientsGrid, filiais: filiais, devolGrid: devolGrid, devolMonths: Object.keys(devolMonths).sort(), abc: abc, cmvGrid: (typeof cmvGrid!=='undefined' ? cmvGrid : null), faoa: faoa, headerRowIdx: headerRowIdx, header: header };
+  return { months: months, grid: grid, clientsGrid: clientsGrid, filiais: filiais, devolGrid: devolGrid, devolMonths: Object.keys(devolMonths).sort(), abc: abc, cmvGrid: (typeof cmvGrid!=='undefined' ? cmvGrid : null), faoa: faoa, headerRowIdx: headerRowIdx, header: header ,
+    os: { grid: osGrid, devol: osDevol, clients_os: osClients, clients_bal: balClients } };
 }
 
 function applyFaturamentoUpdate(parsed, fileName){
   DATA.fat.grid = { months: parsed.months, grid: parsed.grid };
   DATA.fat.clients_grid = parsed.clientsGrid;
+  if (parsed.os) DATA.fat.os = parsed.os;
   DATA.fat.devol_grid = { months: parsed.devolMonths, grid: parsed.devolGrid };
 
   var periodSet = {};
@@ -4813,7 +4877,7 @@ function montarBase(f){
 
   return {
     meta: {gerado_em: f.agora || '', fonte: (f.fontes && f.fontes.metrica) || 'Métrica Mensal.xlsx', filiais: filiais, periodos: Object.keys(periodos).sort(), fontes: f.fontes || {}},
-    fat: {grid:{months:fat.months, grid:fat.grid}, clients_grid:fat.clientsGrid, devol_grid:{months:fat.devolMonths, grid:fat.devolGrid}},
+    fat: {grid:{months:fat.months, grid:fat.grid}, clients_grid:fat.clientsGrid, devol_grid:{months:fat.devolMonths, grid:fat.devolGrid}, os:fat.os},
     abc: abc,
     giro: {months: giroMonths, estoque: giroEst, cmv: fat.cmvGrid || {}},
     invPecas: invPecas,
@@ -4852,7 +4916,7 @@ var SP_PASTA_PATH = '/Documentos Compartilhados/Compras-estoque';   /* caminho d
 var SP_PASTA_WEB  = 'https://maqcampoirrigacao.sharepoint.com/sites/MCPOIRRIGACAO/Documentos%20Compartilhados/Forms/AllItems.aspx?id=%2Fsites%2FMCPOIRRIGACAO%2FDocumentos%20Compartilhados%2FDocumentos%20Compartilhados%2FCompras%2Destoque';
 var PARAM_FILE    = 'compras_pecas_parametros.json';
 var ACESSO_FILE   = 'compras_pecas_acesso.json';
-var CACHE_KEY     = 'compras_pecas_cache_v2';
+var CACHE_KEY     = 'compras_pecas_cache_v3';   /* v3: base inclui fat.os (Tipo de venda) */
 var ARQ_PADRAO = {
   metrica:    'Métrica Mensal.xlsx',
   estoque:    'Estoque Histórico.xlsx',
