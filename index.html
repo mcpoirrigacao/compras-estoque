@@ -513,6 +513,9 @@ body.tab-compras #panel-compras .btn-ghost:hover, body.tab-compras .dropdown-pan
 </style>
 </head>
 <body>
+<div id="mcpo360-aviso" style="position:sticky;top:0;z-index:99999;background:#c1541c;color:#fff;font:600 14px/1.4 system-ui,sans-serif;padding:10px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:center;text-align:center">Este app mudou para o MCPO 360. Os acessos agora são gerenciados na Central de acessos do MCPO 360. <a href="https://mcpoirrigacao.github.io/mcpo360/#compras" target="_top" style="color:#fff;background:rgba(0,0,0,.22);padding:5px 12px;border-radius:6px;text-decoration:none">Abrir no MCPO 360 →</a></div>
+<script>(function(){try{if(/[?&](confirmar|avaliar)=/.test(location.search)){var a=document.getElementById('mcpo360-aviso');if(a)a.remove();}}catch(e){}})();</script>
+
 
 <div id="app">
   <div class="topbar">
@@ -5381,7 +5384,7 @@ async function mcpoRetirar(tk,url,email){
   }catch(e){ return {ok:false,msg:'falha de rede'}; }
 }
 /* Sincroniza as pastas com as listas do app. forcar=true libera de novo todo mundo (botão). */
-function mcpoSincronizar(forcar){
+function mcpoSincronizar(forcar){ return Promise.resolve(); /* MCPO 360: acessos gerenciados na Central */
   _mcpoFila=_mcpoFila.then(()=>_mcpoSincronizar(!!forcar)).catch(e=>console.warn('MCPO acesso:',e));
   return _mcpoFila;
 }
@@ -5428,7 +5431,7 @@ async function _mcpoSincronizar(forcar){
   else if(forcar) MCPO_CFG.toast('Pasta do SharePoint conferida: todos da lista têm acesso.');
 }
 /* Botão + aviso no card de usuários (criado uma vez, ao lado da lista indicada em MCPO_CFG.ancora). */
-function mcpoBotaoPasta(){
+function mcpoBotaoPasta(){ return; /* MCPO 360 */
   if(document.getElementById('mcpo-sync-pasta')) return;
   const a=document.getElementById(MCPO_CFG.ancora); if(!a) return;
   const card=a.closest('.card,fieldset,.drawer,section')||a.parentNode;
