@@ -5322,12 +5322,13 @@ var MCPO_CFG = {
   ancora: 'mcpo-ancora-usuarios',
   podeGerir: ()=>nivelAcesso()==='admin'
 };
-/* ===================== MCPO · ACESSO PADRONIZADO (v1) =====================
+/* ===================== MCPO · ACESSO PADRONIZADO (v2) =====================
    Igual em todos os apps MCPO. Só o bloco MCPO_CFG (logo acima) muda de app para app.
    1) Funções do app no Azure (registro "MCPO API Github") têm prioridade sobre as listas de e-mail.
    2) Quem está nas listas recebe permissão direta na pasta do app no SharePoint (editar ou ler);
       quem sai das listas perde essa permissão. O app anota o que liberou em _mcpo_permissoes.json
-      e só retira o que ele mesmo liberou. Em pastas de outros apps (leitura), nunca retira.
+      e só retira o que ele mesmo liberou. Em pastas de outros apps (leitura) também retira, menos de quem
+      o app dono da pasta ainda libera. Se alguém perder acesso por engano, "Sincronizar" devolve.
    Usa o login do admin com Sites.ReadWrite.All (sem permissão nova no Azure). */
 function rolesAtuais(){
   const r = (typeof msAccount!=='undefined' && msAccount && msAccount.idTokenClaims && msAccount.idTokenClaims.roles) || [];
@@ -5407,10 +5408,15 @@ async function _mcpoSincronizar(forcar){
       const r=await mcpoConceder(tk,p.url,em,papel);
       if(r.ok){ if(tem[em]!==papel) lib++; tem[em]=papel; mudou=true; } else falhas.push(em+' ('+r.msg+')');
     }
+    let doDono=null;   // pasta de outro app: não retira quem o app dono da pasta ainda libera
     for(const em of Object.keys(tem)){
       if(q[em]) continue;
-      if(p.propria){ const r=await mcpoRetirar(tk,p.url,em); if(!r.ok){ falhas.push(em+' ('+r.msg+')'); continue; } ret++; }
-      delete tem[em]; mudou=true;   // pasta de outro app: só esquece, não retira
+      if(!p.propria){
+        if(doDono===null){ doDono={}; try{ const r=await fetch(_mcpoAcao(_mcpoFilho(p.url,MCPO_REG),'content'),{headers:{Authorization:'Bearer '+tk},cache:'no-store'}); if(r.ok){ const j=await r.json(); doDono=(j&&j.pastas&&j.pastas.propria)||{}; } }catch(e){} }
+        if(doDono[em]){ delete tem[em]; mudou=true; continue; }
+      }
+      const r=await mcpoRetirar(tk,p.url,em); if(!r.ok){ falhas.push(em+' ('+r.msg+')'); continue; }
+      ret++; delete tem[em]; mudou=true;
     }
   }
   if(mudou){
